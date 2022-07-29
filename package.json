@@ -1,0 +1,33 @@
+{
+  "name": "slayoyer-bot-test",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "ts-node src/index",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dkaraush/slayoyer-bot-test.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/dkaraush/slayoyer-bot-test/issues"
+  },
+  "homepage": "https://github.com/dkaraush/slayoyer-bot-test#readme",
+  "dependencies": {
+    "colors": "^1.4.0",
+    "isomorphic-unfetch": "^3.1.0",
+    "prompt": "^1.3.0",
+    "socket.io-client": "^4.5.1"
+  },
+  "devDependencies": {
+    "@types/node": "^18.6.2",
+    "@types/prompt": "^1.1.2",
+    "ts-node": "^10.9.1",
+    "typescript": "^4.7.4"
+  }
+}
