@@ -73,5 +73,8 @@ export default class Bot {
   stop() {
     // Bot stops.
     // Clear all timeouts and intervals
+    if (this.timeout) {
+      clearTimeout(this.timeout);
+    }
   }
 }
