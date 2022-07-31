@@ -5,9 +5,8 @@ import prompt from 'prompt'
 import Bot from './bot'
 import { GameMap, GameMapPlayer, Balance, GameMapConfig, SoldierData, Player, PLAYER_SYMBOLS } from './map'
 
-const USERNAME = 'Mi-5'
-const TOKEN =
-  '5dc0fd0b72f76914b24005d0bb6ecf0e36dc2aafdc19cea25675099a1096ebd76e44856c7af38ee68df41ef54b7eb6fc28007aee21e5faeca21504fbbbe75030' // just a random string
+const USERNAME = 'Mi-9'
+const TOKEN = '80422f8f0b68a747edb698e78be987f5772ea7a7bd92e1213c989b063f27ddc1e5a12df0e3e1280599c889d83fad8204b2' // just a random string
 const MODE = 'random'
 
 const HOSTNAME = 'staging-slayoyer.drpenguin.studio'
@@ -90,19 +89,17 @@ prompt.start()
       balance: number | null,
       income: number | null,
       soldiers_raw: [number, number, number][],
-      player_balances_raw: [number, number][]
+      player_balances_raw: ([number, number] | null)[]
     ) => {
       let player_balances: Balance[] = []
       player_balances_raw.forEach((bal) => {
-        player_balances.push(new Balance(mapConfig, bal[0], bal[1], now))
+        player_balances.push(new Balance(mapConfig, (bal || [bal])[0], (bal || [, bal])[1], now))
       })
 
       let soldiers: SoldierData[] = []
       soldiers_raw.forEach((sold) => {
         soldiers.push({ coords: [sold[0], sold[1]], cooldownStart: sold[2] })
       })
-      console.log(soldiers_raw)
-      console.log(soldiers)
 
       if (bot) {
         bot.update(
@@ -114,6 +111,7 @@ prompt.start()
           new Balance(mapConfig, balance, income, now),
           soldiers,
           player_balances,
+          // false
           Math.round((Math.random() * 3) / 4) == 1
         )
       }

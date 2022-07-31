@@ -32,20 +32,36 @@ import {
   Player,
   EMPTY_PLAYER,
   Time,
+  GRAVE,
 } from './map'
 
-const EMPTY_OBJECT = 'o'
 type LandMap = Matrix<GameMapLand | Fog>
 type TeamMap = Matrix<GameMapPlayer | Empty | Fog>
 type ObjsMap = Matrix<GameMapObject | Fog>
-type UserMap = Matrix<GameMapObject | Fog | GameMapLand | typeof EMPTY_OBJECT>
+
+const EMPTY_OBJECT = 'o'
+type UserMapSymbol = GameMapObject | Fog | GameMapLand | typeof EMPTY_OBJECT
+type UserMap = Matrix<UserMapSymbol>
 
 class UserWeight {
   constructor(public territory: number, public defense: number, public attack: number, public farming: number) {}
 }
 
+type PlayerStats = {
+  userMap: UserMap
+  move: number
+  lastInteraction: number
+  averageInteraction: number
+}
+
 export default class Bot {
   private timeout?: NodeJS.Timeout
+
+  private LAST_MOVE_WEIGHT: number = 0.87
+  private FASTER_THEN_USER: number = 0.87
+
+  private TIMEOUT_MIN: number = 1200
+  private TIMEOUT_MAX: number = 6000
 
   private DEFENSE: number
   private ATTACK: number
@@ -65,6 +81,8 @@ export default class Bot {
 
   private soldiers: SoldierData[] = []
 
+  private players_stats: PlayerStats[] = []
+
   constructor(
     private config: GameMapConfig,
     private players: Player[],
@@ -72,6 +90,14 @@ export default class Bot {
     private surrender: () => void
   ) {
     this.meBalance = new Balance(config, null, null, 0)
+    for (let i = 0; i < players.length; i++) {
+      this.players_stats.push({
+        userMap: [[]],
+        move: 0,
+        lastInteraction: 0,
+        averageInteraction: 0,
+      })
+    }
 
     const behaviorInitializer = 0.3 + Math.random() * 0.7
     this.DEFENSE = Math.round(behaviorInitializer * 100)
@@ -118,19 +144,25 @@ export default class Bot {
     }
   }
 
-  private maximumSoldierForBalance<Soldier>(balance: number, income: number) {
+  private maximumSoldierForBalance<Soldier>(balance: Balance) {
     for (let index = SOLDIER_LEVELS.length - 1; index >= 0; index--) {
       if (SOLDIER_LEVELS[index] == EMPTY) return EMPTY
-      if (balance > this.config.economy.prices[SOLDIER_LEVELS[index]] && income > -this.config.economy.income[SOLDIER_LEVELS[index]]) {
+      if (
+        balance.getBalance(this.now.currentTime()) > this.config.economy.prices[SOLDIER_LEVELS[index]] &&
+        balance.getIncome() > -this.config.economy.income[SOLDIER_LEVELS[index]]
+      ) {
         return SOLDIER_LEVELS[index]
       }
     }
     return EMPTY
   }
-  private maximumTowerForBalance<Tower>(balance: number, income: number) {
+  private maximumTowerForBalance<Tower>(balance: Balance) {
     for (let index = TOWER_LEVELS.length - 1; index >= 0; index--) {
       if (TOWER_LEVELS[index] == EMPTY) return EMPTY
-      if (balance > this.config.economy.prices[TOWER_LEVELS[index]] && income > -this.config.economy.income[TOWER_LEVELS[index]]) {
+      if (
+        balance.getBalance(this.now.currentTime()) > this.config.economy.prices[TOWER_LEVELS[index]] &&
+        balance.getIncome() > -this.config.economy.income[TOWER_LEVELS[index]]
+      ) {
         return TOWER_LEVELS[index]
       }
     }
@@ -141,7 +173,29 @@ export default class Bot {
     return objsMap.map((line, y) => line.map((el, x) => (player == teamMap[y][x] ? (el != EMPTY ? el : EMPTY_OBJECT) : landMap[y][x])))
   }
 
-  private getMaxTowerNear = (map: UserMap, y: number, x: number) => {
+  private getCachedUserMap<UserMap>(player: GameMapPlayer) {
+    if (player == EMPTY_PLAYER) return
+    return this.players_stats[PLAYER_SYMBOLS.indexOf(player)].userMap
+  }
+
+  private isUserAction(a: UserMap, b: UserMap) {
+    const aCompressed = a
+      .map((line) => line.join(''))
+      .join('')
+      .split('')
+    const bCompressed = b
+      .map((line) => line.join(''))
+      .join('')
+      .split('')
+    if (aCompressed.length != bCompressed.length) return false // unreachable
+    for (let i = 0; i < aCompressed.length; i++) {
+      if (aCompressed[i] != bCompressed[i] && (bCompressed[i] != LAND || bCompressed[i] != GRAVE || bCompressed[i] != TREE)) return true
+    }
+
+    return false
+  }
+
+  private getMaxTowerNear(map: UserMap, y: number, x: number) {
     let max = isTower(map[y][x]) ? GameMap.level(map[y][x]) : 0
     const checkTower = (y: number, x: number) => isTower((map[y] || [])[x]) && GameMap.level(map[y][x]) > max
     const applyMax = (y: number, x: number) => (max = GameMap.level(map[y][x]))
@@ -153,9 +207,8 @@ export default class Bot {
     return max
   }
 
-  private calculateUserWeight<UserWeight>(player: GameMapPlayer, landMap: LandMap, teamMap: TeamMap, objsMap: ObjsMap) {
-    const userMap = this.getUserMap(player, landMap, teamMap, objsMap)
-    console.log(userMap.map((c) => c.join('')))
+  private calculateUserWeight<UserWeight>(player: GameMapPlayer) {
+    const userMap = this.getCachedUserMap(player) || []
 
     const userMapCompressed = userMap
       .map((line) => line.join(''))
@@ -175,9 +228,123 @@ export default class Bot {
     return new UserWeight(territory, defense, attack, farming)
   }
 
+  private freeSoldierSpaces(player: GameMapPlayer) {
+    const userMap = this.getCachedUserMap(player) || []
+
+    return ([] as Coords[]).concat.apply(
+      [],
+      userMap.map((line, y) =>
+        line.reduce((acc: Coords[], obj, x) => {
+          if (obj == EMPTY_OBJECT || obj == GRAVE || obj == TREE) acc.push([y, x])
+          return acc
+        }, [])
+      )
+    )
+  }
+  private freeSoldierMoveSpaces(player: GameMapPlayer) {
+    const userMap = this.getCachedUserMap(player) || []
+
+    return this.freeSoldierSpaces(player).concat(
+      ([] as Coords[]).concat.apply(
+        [],
+        this.teamMap.map((line, y) =>
+          line.reduce((acc, el, x) => {
+            const neighbours = GameMap.getNeighbours(y, x).filter(([y, x]) => (this.teamMap[y] || [])[x] == player)
+            if (neighbours.length > 0) acc.push([y, x])
+            return acc
+          }, [] as Coords[])
+        )
+      )
+    )
+  }
+
+  private freeBuildingSpaces(player: GameMapPlayer) {
+    const userMap = this.getCachedUserMap(player) || []
+
+    return ([] as Coords[]).concat.apply(
+      [],
+      userMap.map((line, y) =>
+        line.reduce((acc: Coords[], obj, x) => {
+          if (obj == EMPTY_OBJECT) acc.push([y, x])
+          return acc
+        }, [])
+      )
+    )
+  }
+
+  private isPointInluded(coords: Coords[], p: Coords) {
+    for (const point of coords) {
+      if (p[0] == point[0] && p[1] == point[1]) return true
+    }
+    return false
+  }
+
+  private findShortWay(from: Coords, to: Coords) {
+    const levels: Coords[][] = [[from]]
+    for (let i = 0; levels[i].length > 0; i++) {
+      const pastLevel: Coords[] = levels[i]
+      levels.push([])
+      for (const point of pastLevel) {
+        levels[i + 1].push(
+          ...GameMap.getNeighbours(point[0], point[1])
+            .filter(([y, x]) => (this.landMap[y] || [])[x] == LAND)
+            .filter((p) => {
+              for (const level of levels) {
+                if (this.isPointInluded(level, p)) return false
+              }
+              return true
+            })
+        )
+      }
+      if (this.isPointInluded(levels[i + 1], to)) {
+        levels[i + 1] = [to]
+        break
+      }
+    }
+
+    if (levels[levels.length - 1].length == 0) return null
+
+    for (let i = levels.length - 1; i > 1; i--) {
+      const pastLevel: Coords[] = levels[i]
+      const neighbours: Coords[] = []
+      for (const point of pastLevel) {
+        neighbours.push(...GameMap.getNeighbours(point[0], point[1]))
+      }
+      levels[i - 1] = levels[i - 1].filter((p) => this.isPointInluded(neighbours, p))
+    }
+  }
+
+  private getPlayerSoldiers(player: GameMapPlayer) {
+    return this.soldiers.filter((sold) => player == this.teamMap[sold.coords[0]][sold.coords[1]])
+  }
+
   start() {
-    // console.log(this.calculateUserWeight('1', landMap, teamMap, objsMap))
-    const timeout = this.config.tickDuration / 4
+    const meSoldiers = this.getPlayerSoldiers(this.meOnMap)
+    const freeSoldierMoveSpaces = this.freeSoldierMoveSpaces(this.meOnMap)
+
+    if (meSoldiers.length > 0) {
+      const selectedSoldier = meSoldiers[Math.round(Math.random() * (meSoldiers.length - 1))]
+      const soldierType = this.objsMap[selectedSoldier.coords[0]][selectedSoldier.coords[1]]
+      if (soldierType != FOG) {
+        this.makeMove(
+          selectedSoldier.coords,
+          freeSoldierMoveSpaces[Math.round(Math.random() * (freeSoldierMoveSpaces.length - 1))],
+          soldierType
+        )
+      }
+    }
+
+    const meWeight = this.calculateUserWeight(this.meOnMap)
+    const freeBuildingSpaces = this.freeBuildingSpaces(this.meOnMap)
+    if (meWeight.defense / meWeight.territory < 1 && freeBuildingSpaces.length > 3) {
+      const tower = this.maximumTowerForBalance(this.meBalance)
+      this.makeMove(null, freeBuildingSpaces[0], tower)
+    }
+
+    let timeout =
+      this.FASTER_THEN_USER * this.players_stats.reduce((acc, stat) => (acc > stat.averageInteraction ? stat.averageInteraction : acc), 0)
+    if (timeout > this.TIMEOUT_MAX) timeout = this.TIMEOUT_MAX
+    if (timeout < this.TIMEOUT_MIN) timeout = this.TIMEOUT_MIN
     this.timeout = setTimeout(() => this.start(), timeout)
   }
 
@@ -208,6 +375,19 @@ export default class Bot {
 
     this.soldiers = soldiers
 
+    for (let i = 0; i < this.players_stats.length; i++) {
+      const userMap = this.getUserMap(this.players[i].symbol, landMap, teamMap, objsMap)
+      if (this.isUserAction(userMap, this.players_stats[i].userMap)) {
+        const lastmove = this.players_stats[i].move++
+        this.players_stats[i].averageInteraction =
+          (this.players_stats[i].averageInteraction * lastmove * this.LAST_MOVE_WEIGHT +
+            (now - this.players_stats[i].lastInteraction) * (2 - this.LAST_MOVE_WEIGHT)) /
+          (lastmove + 1)
+        this.players_stats[i].lastInteraction = now
+      }
+      this.players_stats[i].userMap = userMap
+    }
+
     if (log) {
       console.log(
         'Balance: $' +
@@ -221,7 +401,7 @@ export default class Bot {
     }
 
     if (!this.timeout) {
-      this.timeout = setTimeout(this.start, 0)
+      this.timeout = setTimeout(() => this.start(), 0)
     }
   }
 
