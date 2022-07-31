@@ -24,6 +24,8 @@ export const isPlayer = (s: any): s is GameMapPlayer => s == EMPTY_PLAYER || PLA
 export const isNotEmptyPlayer = (s: any): s is typeof PLAYER_SYMBOLS[number] => isPlayer(s) && s != EMPTY_PLAYER
 export type GameMapPlayer = typeof EMPTY_PLAYER | typeof PLAYER_SYMBOLS[number]
 
+export type Player = { symbol: GameMapPlayer; name: string; rating: number; bot: boolean }
+
 export const TOWNHALL = '&' as const
 export type TownHall = typeof TOWNHALL
 
@@ -49,6 +51,7 @@ export type Farm = typeof FARM
 
 export const TOWER1 = '|' as const
 export const TOWER2 = '‖' as const
+export const TOWER_LEVELS = [EMPTY, EMPTY, TOWER1, TOWER2] as const
 export const isTower = (s: any): s is Tower => s == TOWER1 || s == TOWER2
 export type Tower = typeof TOWER1 | typeof TOWER2
 
@@ -57,6 +60,35 @@ export type GameMapObject = Empty | TownHall | Farm | Tower | Soldier | Tree | G
 export type GameTime = number
 
 export type SoldierData = { coords: Coords; cooldownStart: GameTime }
+
+export class Time {
+  constructor(private serverTime: number, private systemTime: number) {}
+
+  public currentTime() {
+    return this.serverTime + (this.systemTime - new Date().getTime())
+  }
+}
+
+export class Balance {
+  constructor(private config: GameMapConfig, private rawBalance: number | null, private income: number | null, private setTime: number) {}
+
+  public reset(rawBalance: number, income: number, setTime: number) {
+    this.rawBalance = rawBalance
+    this.income = income
+    this.setTime = setTime
+  }
+
+  public isValid() {
+    return this.rawBalance != null && this.income != null
+  }
+
+  public getBalance(time: number) {
+    return ((this.rawBalance || 0) + (this.income || 0) * (time - this.setTime)) / this.config.tickDuration
+  }
+  public getIncome() {
+    return this.income || 0
+  }
+}
 
 export class GameMap {
   public static DEFAULT_CONFIG = {
@@ -72,6 +104,7 @@ export class GameMap {
         [TOWNHALL]: +2,
         [LAND]: +1,
         [FARM]: +4,
+        [EMPTY]: 0,
         [SOLDIER1]: -1,
         [SOLDIER2]: -6,
         [SOLDIER3]: -18,
@@ -84,6 +117,7 @@ export class GameMap {
       prices: {
         farmStart: 12,
         farmStep: +6,
+        [EMPTY]: 0,
         [SOLDIER1]: 10,
         [SOLDIER2]: 20,
         [SOLDIER3]: 30,

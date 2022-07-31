@@ -3,27 +3,29 @@ import io from 'socket.io-client'
 import fetch from 'isomorphic-unfetch'
 import prompt from 'prompt'
 import Bot from './bot'
-import { GameMap, GameMapPlayer } from './map'
+import { GameMap, GameMapPlayer, Balance, GameMapConfig, SoldierData, Player, PLAYER_SYMBOLS } from './map'
 
-const USERNAME = 'mybot1'
-const TOKEN = 'JAKDn1d1ZXKsdm1dmsAkn32FNDAAKSkdwd1' // just a random string
+const USERNAME = 'Mi-5'
+const TOKEN =
+  '5dc0fd0b72f76914b24005d0bb6ecf0e36dc2aafdc19cea25675099a1096ebd76e44856c7af38ee68df41ef54b7eb6fc28007aee21e5faeca21504fbbbe75030' // just a random string
 const MODE = 'random'
 
 const HOSTNAME = 'staging-slayoyer.drpenguin.studio'
 const PROTOCOL = 9
 
+let mapConfig: GameMapConfig
+
 prompt.message = ''
 prompt.delimiter = ''
 prompt.start()
-
 ;(async function () {
   const { username, rating, created, playing } = await (
     await fetch(`https://${HOSTNAME}/auth/local?token=${TOKEN}&username=${USERNAME}`)
   ).json()
 
-  console.log(`Logined as ${username} ★${rating}`)
+  console.log(`Logined as ${username} ★ ${rating}`)
 
-  const socket = io(`wss://${HOSTNAME}/?token=${TOKEN}&protocol=${PROTOCOL}&mode=${MODE}`)
+  const socket = io(`wss://${HOSTNAME}/?token=${TOKEN}&protocol=${PROTOCOL}&mode=${MODE}&bot`)
 
   let bot: Bot | undefined
 
@@ -45,20 +47,33 @@ prompt.start()
   socket.on('mm-status', (count) => console.log(`\nMatchmaking: ${count} players found`))
 
   socket.on('config', (config, usernames) => {
+    mapConfig = config
     console.log('Playing with:')
     for (const p of usernames) {
       if (p) {
-        console.log(' - ' + p[0] + ' ★' + p[1])
+        console.log(' - ' + p[0] + ' ★ ' + p[1])
       } else {
         console.log(' - Bot')
       }
     }
+
+    let players: Player[] = []
+    usernames.forEach((user: [string, number] | null, id: number) => {
+      const isBot = user == null
+      players.push({
+        symbol: PLAYER_SYMBOLS[id],
+        name: isBot ? 'Super server Bot >~<' : user[0],
+        rating: isBot ? config.averageRating || 1500 : user[1],
+        bot: isBot,
+      })
+    })
 
     if (bot) {
       bot.stop()
     }
     bot = new Bot(
       config,
+      players,
       (from, to, what) => socket.emit('move', from, to, what),
       () => socket.emit('surrender')
     )
@@ -74,8 +89,21 @@ prompt.start()
       me: string,
       balance: number | null,
       income: number | null,
-      soldiers: [number, number, number][]
+      soldiers_raw: [number, number, number][],
+      player_balances_raw: [number, number][]
     ) => {
+      let player_balances: Balance[] = []
+      player_balances_raw.forEach((bal) => {
+        player_balances.push(new Balance(mapConfig, bal[0], bal[1], now))
+      })
+
+      let soldiers: SoldierData[] = []
+      soldiers_raw.forEach((sold) => {
+        soldiers.push({ coords: [sold[0], sold[1]], cooldownStart: sold[2] })
+      })
+      console.log(soldiers_raw)
+      console.log(soldiers)
+
       if (bot) {
         bot.update(
           now,
@@ -83,9 +111,10 @@ prompt.start()
           GameMap.toMatrix(teamMap),
           GameMap.toMatrix(objsMap),
           me as GameMapPlayer,
-          balance,
-          income,
-          soldiers
+          new Balance(mapConfig, balance, income, now),
+          soldiers,
+          player_balances,
+          Math.round((Math.random() * 3) / 4) == 1
         )
       }
     }
